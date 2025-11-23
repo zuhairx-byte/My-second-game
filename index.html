@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Endless Dodger — Mobile & Desktop</title>
+  <style>
+    :root{--bg:#0b1220;--panel:#0f1724;--accent:#00d4ff;--muted:#9aa6b2}
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial}
+    body{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#071024 0%, #081234 100%);color:#e6f0f6}
+    .wrap{width:100%;max-width:900px;padding:18px;box-sizing:border-box}
+    .game-card{background:rgba(255,255,255,0.03);border-radius:14px;padding:12px;box-shadow:0 6px 30px rgba(2,6,23,0.6)}
+    header{display:flex;align-items:center;justify-content:space-between;padding:6px 8px}
+    header h1{font-size:18px;margin:0}
+    .hud{display:flex;gap:10px;align-items:center}
+    .hud .pill{background:var(--panel);padding:6px 10px;border-radius:999px;font-size:14px;color:var(--muted)}
+    #gameCanvas{display:block;width:100%;height:auto;border-radius:10px;background:linear-gradient(180deg,#0b2a1f,#05203a)}
+    .controls{display:flex;gap:8px;justify-content:center;margin-top:10px}
+    .btn{user-select:none;touch-action:none;background:linear-gradient(180deg,#0b1220,#072033);border:1px solid rgba(255,255,255,0.04);padding:12px 16px;border-radius:8px;color:#dff6ff;font-weight:600}
+    .btn:active{transform:translateY(1px)}
+    .mobile-controls{display:none;gap:10px;align-items:center}
+    .touch-btn{width:68px;height:68px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:22px}
+    .small{font-size:13px;padding:6px 8px}
+    footer{display:flex;justify-content:space-between;padding-top:8px;opacity:0.9}
+    .overlay{position:relative}
+    /* show mobile controls when small */
+    @media (max-width:700px){
+      .mobile-controls{display:flex}
+      .controls{display:none}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="game-card">
+      <header>
+        <h1>Endless Dodger</h1>
+        <div class="hud">
+          <div class="pill" id="score">Score: 0</div>
+          <div class="pill" id="best">Best: 0</div>
+        </div>
+      </header>
+      <div class="overlay">
+        <canvas id="gameCanvas" width="800" height="1200"></canvas>
+      </div>
+      <div class="controls" role="group" aria-label="game controls">
+        <button class="btn" id="leftBtn">◀︎ Left</button>
+        <button class="btn" id="restartBtn">Restart</button>
+        <button class="btn" id="rightBtn">Right ▶︎</button>
+      </div>
+      <div class="mobile-controls">
+        <button class="btn touch-btn" id="mLeft">◀</button>
+        <button class="btn small" id="mRestart">Restart</button>
+        <button class="btn touch-btn" id="mRight">▶</button>
+      </div>
+      <footer>
+        <div class="small" style="color:var(--muted)">Controls: Arrow keys / A D or Touch buttons / Swipe</div>
+        <div class="small" style="color:var(--muted)">Avoid obstacles. Survive & grow score!</div>
+      </footer>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  // Hi-DPI scaling
+  function resizeCanvas(){
+    const ratio = window.devicePixelRatio || 1;
+    const w = Math.min(window.innerWidth - 40, 900);
+    const gameWidth = 400; // internal logical width
+    const gameHeight = 600; // internal logical height
+    canvas.style.width = w + 'px';
+    canvas.width = Math.round(gameWidth * ratio);
+    canvas.height = Math.round(gameHeight * ratio);
+    canvas.style.height = Math.round((gameHeight / gameWidth) * w) + 'px';
+    ctx.setTransform(ratio,0,0,ratio,0,0);
+  }
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  // DOM
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const leftBtn = document.getElementById('leftBtn');
+  const rightBtn = document.getElementById('rightBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const mLeft = document.getElementById('mLeft');
+  const mRight = document.getElementById('mRight');
+  const mRestart = document.getElementById('mRestart');
+
+  // Game state
+  const W = 400, H = 600;
+  let player = {x: W/2, y: H - 70, w: 44, h: 44, speed: 230};
+  let obstacles = [];
+  let lastTime = 0;
+  let spawnTimer = 0;
+  let spawnInterval = 900; // ms
+  let score = 0;
+  let best = localStorage.getItem('endlessDodgerBest') || 0;
+  bestEl.textContent = 'Best: ' + best;
+  let playing = true;
+  let input = {left:false,right:false};
+
+  function reset(){
+    player.x = W/2;
+    obstacles = [];
+    score = 0;
+    spawnTimer = 0;
+    spawnInterval = 900;
+    playing = true;
+  }
+
+  restartBtn.addEventListener('click', ()=> reset());
+  mRestart.addEventListener('click', ()=> reset());
+
+  // Buttons
+  leftBtn.addEventListener('pointerdown', ()=> input.left = true);
+  leftBtn.addEventListener('pointerup', ()=> input.left = false);
+  rightBtn.addEventListener('pointerdown', ()=> input.right = true);
+  rightBtn.addEventListener('pointerup', ()=> input.right = false);
+  mLeft.addEventListener('pointerdown', ()=> input.left = true);
+  mLeft.addEventListener('pointerup', ()=> input.left = false);
+  mRight.addEventListener('pointerdown', ()=> input.right = true);
+  mRight.addEventListener('pointerup', ()=> input.right = false);
+
+  // Keyboard
+  window.addEventListener('keydown', (e)=>{
+    if(e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') input.left = true;
+    if(e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') input.right = true;
+    if(e.key === ' '){ if(!playing) reset(); }
+  });
+  window.addEventListener('keyup', (e)=>{
+    if(e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') input.left = false;
+    if(e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') input.right = false;
+  });
+
+  // Touch swipe
+  let touchStartX = null;
+  let touchStartY = null;
+  canvas.addEventListener('touchstart', (e)=>{
+    const t = e.touches[0];
+    touchStartX = t.clientX; touchStartY = t.clientY;
+  }, {passive:true});
+  canvas.addEventListener('touchend', (e)=>{
+    if(touchStartX === null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    if(Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 30){
+      if(dx > 0){ input.right = true; setTimeout(()=> input.right = false, 120); }
+      else { input.left = true; setTimeout(()=> input.left = false, 120); }
+    }
+    touchStartX = touchStartY = null;
+  });
+
+  // helpers
+  function rand(min,max){return Math.random()*(max-min)+min}
+  function rectsOverlap(a,b){
+    return !(a.x + a.w < b.x || a.x > b.x + b.w || a.y + a.h < b.y || a.y > b.y + b.h);
+  }
+
+  function spawnObstacle(){
+    const width = Math.round(rand(40, 110));
+    const x = rand(20, W - width - 20);
+    const speed = rand(90, 230) + Math.min(score/10, 180);
+    const colorHue = Math.round(rand(0,360));
+    obstacles.push({x, y:-60, w: width, h: 36, speed, hue: colorHue});
+  }
+
+  function update(dt){
+    if(!playing) return;
+    // move player
+    const move = (input.right?1:0) - (input.left?1:0);
+    player.x += move * player.speed * dt;
+    // clamp
+    player.x = Math.max(10, Math.min(W - player.w - 10, player.x));
+
+    // obstacles
+    spawnTimer += dt*1000;
+    if(spawnTimer > spawnInterval){ spawnTimer = 0; spawnInterval = Math.max(380, spawnInterval * 0.99); spawnObstacle(); }
+
+    for(let i=obstacles.length-1;i>=0;i--){
+      const o = obstacles[i];
+      o.y += o.speed * dt;
+      if(o.y > H + 80) obstacles.splice(i,1);
+      // collision
+      if(rectsOverlap({x:player.x,y:player.y,w:player.w,h:player.h}, o)){
+        playing = false;
+        if(score > best){ best = Math.floor(score); localStorage.setItem('endlessDodgerBest', best); bestEl.textContent = 'Best: ' + best; }
+      }
+    }
+
+    // score increases with time survived
+    score += dt * 60; // adjust pace
+    scoreEl.textContent = 'Score: ' + Math.floor(score);
+  }
+
+  function draw(){
+    // clear
+    ctx.clearRect(0,0,W,H);
+
+    // background grid
+    ctx.fillStyle = '#021218';
+    ctx.fillRect(0,0,W,H);
+    // moving gradient road
+    const grad = ctx.createLinearGradient(0,0,0,H);
+    grad.addColorStop(0,'#052a2b');
+    grad.addColorStop(1,'#021218');
+    ctx.fillStyle = grad;
+    ctx.fillRect(12,20,W-24,H-40);
+
+    // draw obstacles
+    obstacles.forEach(o=>{
+      ctx.fillStyle = 'hsl('+o.hue+',70%,57%)';
+      roundRect(ctx,o.x,o.y,o.w,o.h,8,true,false);
+      ctx.fillStyle = 'rgba(0,0,0,0.12)';
+      ctx.fillRect(o.x+6, o.y+6, o.w-12, 6);
+    });
+
+    // draw player
+    ctx.save();
+    ctx.translate(player.x + player.w/2, player.y + player.h/2);
+    ctx.rotate(Math.sin(Date.now()/200)*0.03);
+    ctx.fillStyle = '#00d4ff';
+    roundRect(ctx, -player.w/2, -player.h/2, player.w, player.h, 8, true, false);
+    ctx.restore();
+
+    // UI overlay when stopped
+    if(!playing){
+      ctx.fillStyle = 'rgba(0,0,0,0.46)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 28px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('Game Over', W/2, H/2 - 10);
+      ctx.font = '16px system-ui';
+      ctx.fillText('Tap Restart or press Space to play again', W/2, H/2 + 20);
+    }
+  }
+
+  function roundRect(ctx,x,y,w,h,r,fill,stroke){
+    if(typeof r==='undefined') r=5;
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+    if(fill) ctx.fill();
+    if(stroke) ctx.stroke();
+  }
+
+  function loop(ts){
+    if(!lastTime) lastTime = ts; const dt = Math.min(0.033, (ts - lastTime)/1000); lastTime = ts;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  requestAnimationFrame(loop);
+
+  // initial obstacles to make it interesting
+  for(let i=0;i<4;i++) spawnObstacle();
+
+})();
+</script>
+</body>
+</html>
